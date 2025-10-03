@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.0.0
+
+- Forked from [wyoming-piper](https://github.com/rhasspy/wyoming-piper/) to support Kokoro Torch instead.
+- Updated sentence-stream library.
+
 ## 2.0.0
 
 - Use [piper1-gpl](https://github.com/OHF-Voice/piper1-gpl/) library instead of piper binary

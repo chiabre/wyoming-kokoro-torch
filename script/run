@@ -14,4 +14,4 @@ if _VENV_DIR.exists():
 else:
     python_exe = "python3"
 
-subprocess.check_call([python_exe, "-m", "wyoming_piper"] + sys.argv[1:])
+subprocess.check_call([context.env_exe, "-m", "wyoming_kokoro_torch"] + sys.argv[1:])

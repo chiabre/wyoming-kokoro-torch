@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import signal
 import json
 import logging
 from functools import partial
@@ -11,8 +12,8 @@ from wyoming.info import Attribution, Info, TtsProgram, TtsVoice, TtsVoiceSpeake
 from wyoming.server import AsyncServer
 
 from . import __version__
-from .download import ensure_voice_exists, find_voice, get_voices
-from .handler import PiperEventHandler
+from .download import ensure_voice_exists, find_model_file, get_voices
+from .handler import KokoroEventHandler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,14 +24,14 @@ async def main() -> None:
     parser.add_argument(
         "--voice",
         required=True,
-        help="Default Piper voice to use (e.g., en_US-lessac-medium)",
+        help="Default kokoro voice to use (e.g., af_heart)",
     )
     parser.add_argument("--uri", default="stdio://", help="unix:// or tcp://")
     parser.add_argument(
         "--data-dir",
         required=True,
         action="append",
-        help="Data directory to check for downloaded models",
+        help="Data directory to store downloaded models",
     )
     parser.add_argument(
         "--download-dir",
@@ -38,12 +39,7 @@ async def main() -> None:
     )
     #
     parser.add_argument(
-        "--speaker", type=str, help="Name or id of speaker for default voice"
-    )
-    parser.add_argument("--noise-scale", type=float, help="Generator noise")
-    parser.add_argument("--length-scale", type=float, help="Phoneme length")
-    parser.add_argument(
-        "--noise-w-scale", "--noise-w", type=float, help="Phoneme width noise"
+        "--speed", type=float, default=1.0, help="Speed of the voice"
     )
     #
     parser.add_argument(
@@ -57,15 +53,14 @@ async def main() -> None:
     )
     #
     parser.add_argument(
-        "--update-voices",
+        "--compile",
         action="store_true",
-        help="Download latest voices.json during startup",
+        help="Compile the Torch model",
     )
-    #
     parser.add_argument(
-        "--use-cuda",
-        action="store_true",
-        help="Use CUDA if available (requires onnxruntime-gpu)",
+        "--device",
+        default="cpu",
+        help="Torch backend device to use (eg. cpu, cuda, mps, depending on your system and installed runtimes)",
     )
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
@@ -90,7 +85,7 @@ async def main() -> None:
     _LOGGER.debug(args)
 
     # Load voice info
-    voices_info = get_voices(args.download_dir, update_voices=args.update_voices)
+    voices_info = get_voices()
 
     # Resolve aliases for backwards compatibility with old voice names
     aliases_info: Dict[str, Any] = {}
@@ -104,24 +99,14 @@ async def main() -> None:
             name=voice_name,
             description=get_description(voice_info),
             attribution=Attribution(
-                name="rhasspy", url="https://github.com/rhasspy/piper"
+                name="hexgrad", url="https://github.com/hexgrad/kokoro"
             ),
             installed=True,
             version=None,
             languages=[
-                voice_info.get("language", {}).get(
-                    "code",
-                    voice_info.get("espeak", {}).get("voice", voice_name.split("_")[0]),
-                )
+                voice_info.get("language", {}).get("code")
             ],
-            speakers=(
-                [
-                    TtsVoiceSpeaker(name=speaker_name)
-                    for speaker_name in voice_info["speaker_id_map"]
-                ]
-                if voice_info.get("speaker_id_map")
-                else None
-            ),
+            speakers=None,
         )
         for voice_name, voice_info in voices_info.items()
         if not voice_info.get("_is_alias", False)
@@ -131,54 +116,30 @@ async def main() -> None:
     if args.voice not in voices_info:
         custom_voice_names.add(args.voice)
 
-    for data_dir in args.data_dir:
-        data_dir = Path(data_dir)
-        if not data_dir.is_dir():
-            continue
-
-        for onnx_path in data_dir.glob("*.onnx"):
-            custom_voice_name = onnx_path.stem
-            if custom_voice_name not in voices_info:
-                custom_voice_names.add(custom_voice_name)
-
     for custom_voice_name in custom_voice_names:
         # Add custom voice info
-        custom_voice_path, custom_config_path = find_voice(
+        custom_voice_path = find_model_file(
             custom_voice_name, args.data_dir
         )
-        with open(custom_config_path, "r", encoding="utf-8") as custom_config_file:
-            custom_config = json.load(custom_config_file)
-            custom_name = custom_config.get("dataset", custom_voice_path.stem)
-            custom_quality = custom_config.get("audio", {}).get("quality")
-            if custom_quality:
-                description = f"{custom_name} ({custom_quality})"
-            else:
-                description = custom_name
 
-            lang_code = custom_config.get("language", {}).get("code")
-            if not lang_code:
-                lang_code = custom_config.get("espeak", {}).get("voice")
-                if not lang_code:
-                    lang_code = custom_voice_path.stem.split("_")[0]
-
-            voices.append(
-                TtsVoice(
-                    name=custom_name,
-                    description=description,
-                    version=None,
-                    attribution=Attribution(name="", url=""),
-                    installed=True,
-                    languages=[lang_code],
-                )
+        voices.append(
+            TtsVoice(
+                name=custom_voice_name,
+                description="Custom voice",
+                version=None,
+                attribution=Attribution(name="", url=""),
+                installed=True,
+                languages=["en_US"],
             )
+        )
 
     wyoming_info = Info(
         tts=[
             TtsProgram(
-                name="piper",
+                name="kokoro",
                 description="A fast, local, neural text to speech engine",
                 attribution=Attribution(
-                    name="rhasspy", url="https://github.com/rhasspy/piper"
+                    name="hexgrad", url="https://github.com/hexgrad/kokoro"
                 ),
                 installed=True,
                 voices=sorted(voices, key=lambda v: v.name),
@@ -198,10 +159,15 @@ async def main() -> None:
     # Start server
     server = AsyncServer.from_uri(args.uri)
 
+    # Handle OS signals
+    loop = asyncio.get_event_loop()
+    for s in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(s, lambda: asyncio.create_task(server.stop()))
+
     _LOGGER.info("Ready")
     await server.run(
         partial(
-            PiperEventHandler,
+            KokoroEventHandler,
             wyoming_info,
             args,
             voices_info,

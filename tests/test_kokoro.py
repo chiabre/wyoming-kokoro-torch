@@ -1,4 +1,4 @@
-"""Tests for wyoming-piper"""
+"""Tests for wyoming-kokoro-torch"""
 
 import asyncio
 import sys
@@ -22,15 +22,17 @@ _TIMEOUT = 60
 
 
 @pytest.mark.asyncio
-async def test_piper() -> None:
+async def test_kokoro() -> None:
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
         "-m",
-        "wyoming_piper",
+        "wyoming_kokoro_torch",
+        # takes about 40s to compile
+        #"--compile",
         "--uri",
         "stdio://",
         "--voice",
-        "en_US-ryan-low",
+        "af_heart",
         "--data-dir",
         str(_LOCAL_DIR),
         stdin=PIPE,
@@ -52,13 +54,13 @@ async def test_piper() -> None:
         assert len(info.tts) == 1, "Expected one tts service"
         tts = info.tts[0]
         assert len(tts.voices) > 0, "Expected at least one voice"
-        voice_model = next((v for v in tts.voices if v.name == "en_US-ryan-low"), None)
-        assert voice_model is not None, "Expected ryan voice"
+        voice_model = next((v for v in tts.voices if v.name == "af_heart"), None)
+        assert voice_model is not None, "Expected af_heart voice"
         break
 
     # Synthesize text
     await async_write_event(
-        Synthesize("This is a test.", voice=SynthesizeVoice("en_US-ryan-low")).event(),
+        Synthesize("This is a test.", voice=SynthesizeVoice("af_heart")).event(),
         proc.stdin,
     )
 
@@ -90,6 +92,12 @@ async def test_piper() -> None:
 
     actual_array = np.frombuffer(actual_audio, dtype=np.int16)
 
+    # with wave.open(str(_DIR / "this_is_a_test.wav"), "wb") as wav_file:
+    #     wav_file.setframerate(audio_start.rate)
+    #     wav_file.setnchannels(audio_start.channels)
+    #     wav_file.setsampwidth(audio_start.width)
+    #     wav_file.writeframes(actual_audio)
+
     # Less than 20% difference in length
     assert (
         abs(len(actual_array) - len(expected_array))
@@ -101,3 +109,9 @@ async def test_piper() -> None:
     expected_mfcc = python_speech_features.mfcc(expected_array, winstep=0.02)
     actual_mfcc = python_speech_features.mfcc(actual_array, winstep=0.02)
     assert compute_optimal_path(actual_mfcc, expected_mfcc) < 10
+
+    # Need to close stdin for graceful termination
+    proc.stdin.close()
+    _, stderr = await proc.communicate()
+
+    assert proc.returncode == 0, stderr.decode()

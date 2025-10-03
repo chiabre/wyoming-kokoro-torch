@@ -2,13 +2,15 @@
 
 import argparse
 import asyncio
+import sys
 import logging
 import math
-import tempfile
-import wave
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from piper import PiperVoice, SynthesisConfig
+import numpy as np
+from kokoro import KModel, KPipeline
+import torch
 from sentence_stream import SentenceBoundaryDetector
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.error import Error
@@ -23,17 +25,26 @@ from wyoming.tts import (
     SynthesizeStopped,
 )
 
-from .download import ensure_voice_exists, find_voice
+from .download import ensure_voice_exists, find_model_file
 
 _LOGGER = logging.getLogger(__name__)
 
 # Keep the most recently used voice loaded
-_VOICE: Optional[PiperVoice] = None
+_VOICE = None # will be a FloatTensor of the voice model
 _VOICE_NAME: Optional[str] = None
 _VOICE_LOCK = asyncio.Lock()
 
 
-class PiperEventHandler(AsyncEventHandler):
+# class KCompiledModel(KModel):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+
+#     @torch.compile
+#     def forward(self, *args, **kwargs):
+#         return super().forward(*args, **kwargs)
+
+
+class KokoroEventHandler(AsyncEventHandler):
     def __init__(
         self,
         wyoming_info: Info,
@@ -44,12 +55,25 @@ class PiperEventHandler(AsyncEventHandler):
     ) -> None:
         super().__init__(*args, **kwargs)
 
+        data_dirs = cli_args.data_dir
+
         self.cli_args = cli_args
         self.wyoming_info_event = wyoming_info.event()
         self.voices_info = voices_info
         self.is_streaming: Optional[bool] = None
         self.sbd = SentenceBoundaryDetector()
         self._synthesize: Optional[Synthesize] = None
+
+        self._model = KModel(model=find_model_file("kokoro-v1_0.pth", data_dirs), config=find_model_file("config.json", data_dirs)).to(self.cli_args.device).eval()
+        if self.cli_args.compile:
+            self._model.compile(dynamic=True)
+
+        self._pipelines: Dict[str, KPipeline] = {}
+
+    def get_pipeline(self, lang_code: str) -> KPipeline:
+        if lang_code not in self._pipelines:
+            self._pipelines[lang_code] = KPipeline(lang_code, model=self._model)
+        return self._pipelines[lang_code]
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
@@ -162,18 +186,12 @@ class PiperEventHandler(AsyncEventHandler):
         # Resolve voice
         _LOGGER.debug("synthesize: raw_text=%s, text='%s'", raw_text, text)
         voice_name: Optional[str] = None
-        voice_speaker: Optional[str] = None
         if synthesize.voice is not None:
             voice_name = synthesize.voice.name
-            voice_speaker = synthesize.voice.speaker
 
         if voice_name is None:
             # Default voice
             voice_name = self.cli_args.voice
-
-        if voice_name == self.cli_args.voice:
-            # Default speaker
-            voice_speaker = voice_speaker or self.cli_args.speaker
 
         assert voice_name is not None
 
@@ -182,94 +200,64 @@ class PiperEventHandler(AsyncEventHandler):
         voice_name = voice_info.get("key", voice_name)
         assert voice_name is not None
 
-        with tempfile.NamedTemporaryFile(mode="wb+", suffix=".wav") as output_file:
-            async with _VOICE_LOCK:
-                if voice_name != _VOICE_NAME:
-                    # Load new voice
-                    _LOGGER.debug("Loading voice: %s", _VOICE_NAME)
-                    ensure_voice_exists(
-                        voice_name,
-                        self.cli_args.data_dir,
-                        self.cli_args.download_dir,
-                        self.voices_info,
-                    )
-                    model_path, config_path = find_voice(
-                        voice_name, self.cli_args.data_dir
-                    )
-                    _VOICE = PiperVoice.load(
-                        model_path, config_path, use_cuda=self.cli_args.use_cuda
-                    )
-                    _VOICE_NAME = voice_name
+        # Kokoro lang_code to fetch the correct pipeline
+        lang_code = voice_name[0]
 
-                assert _VOICE is not None
+        pipeline = self.get_pipeline(lang_code)
 
-                syn_config = SynthesisConfig()
-                if voice_speaker is not None:
-                    syn_config.speaker_id = _VOICE.config.speaker_id_map.get(
-                        voice_speaker
-                    )
-                    if syn_config.speaker_id is None:
-                        try:
-                            # Try to interpret as an id
-                            syn_config.speaker_id = int(voice_speaker)
-                        except ValueError:
-                            pass
+        async with _VOICE_LOCK:
+            if voice_name != _VOICE_NAME:
+                # Load new voice
+                _LOGGER.debug("Loading voice: %s", voice_name)
 
-                    if syn_config.speaker_id is None:
-                        _LOGGER.warning(
-                            "No speaker '%s' for voice '%s'", voice_speaker, voice_name
-                        )
+                ensure_voice_exists(
+                    voice_name,
+                    self.cli_args.data_dir,
+                    self.cli_args.download_dir,
+                    self.voices_info,
+                )
+                voice_model_path = find_model_file(
+                    f"{voice_name}.pt", self.cli_args.data_dir
+                )
 
-                if self.cli_args.length_scale is not None:
-                    syn_config.length_scale = self.cli_args.length_scale
+                # TODO: voices can be mixed by seperating them by a comma
+                _VOICE = pipeline.load_voice(str(voice_model_path))
+                _VOICE_NAME = voice_name
 
-                if self.cli_args.noise_scale is not None:
-                    syn_config.noise_scale = self.cli_args.noise_scale
+        assert _VOICE is not None
 
-                if self.cli_args.noise_w_scale is not None:
-                    syn_config.noise_w_scale = self.cli_args.noise_w_scale
+        samplerate = 24000
+        width = 2 # in bytes
 
-                wav_writer: wave.Wave_write = wave.open(output_file, "wb")
-                with wav_writer:
-                    _VOICE.synthesize_wav(text, wav_writer, syn_config)
+        if send_start:
+            await self.write_event(
+                AudioStart(
+                    rate=samplerate,
+                    width=width,
+                    channels=1,
+                ).event(),
+            )
 
-            output_file.seek(0)
+        bytes_per_chunk = width * self.cli_args.samples_per_chunk
 
-            wav_file: wave.Wave_read = wave.open(output_file, "rb")
-            with wav_file:
-                rate = wav_file.getframerate()
-                width = wav_file.getsampwidth()
-                channels = wav_file.getnchannels()
+        for i, (graphenes, phonemes, audio) in enumerate(pipeline(text, voice=_VOICE, speed=self.cli_args.speed, split_pattern=None)):
+            raw_audio = np.array(audio * 32767.0, dtype=np.int16).tobytes()
+            num_chunks = int(math.ceil(len(raw_audio) / bytes_per_chunk))
 
-                if send_start:
-                    await self.write_event(
-                        AudioStart(
-                            rate=rate,
-                            width=width,
-                            channels=channels,
-                        ).event(),
-                    )
+            # Split into chunks
+            for i in range(num_chunks):
+                offset = i * bytes_per_chunk
+                chunk = raw_audio[offset : offset + bytes_per_chunk]
+                await self.write_event(
+                    AudioChunk(
+                        audio=chunk,
+                        rate=samplerate,
+                        width=width,
+                        channels=1,
+                    ).event(),
+                )
 
-                # Audio
-                audio_bytes = wav_file.readframes(wav_file.getnframes())
-                bytes_per_sample = width * channels
-                bytes_per_chunk = bytes_per_sample * self.cli_args.samples_per_chunk
-                num_chunks = int(math.ceil(len(audio_bytes) / bytes_per_chunk))
-
-                # Split into chunks
-                for i in range(num_chunks):
-                    offset = i * bytes_per_chunk
-                    chunk = audio_bytes[offset : offset + bytes_per_chunk]
-                    await self.write_event(
-                        AudioChunk(
-                            audio=chunk,
-                            rate=rate,
-                            width=width,
-                            channels=channels,
-                        ).event(),
-                    )
-
-            if send_stop:
-                await self.write_event(AudioStop().event())
+        if send_stop:
+            await self.write_event(AudioStop().event())
 
         return True
