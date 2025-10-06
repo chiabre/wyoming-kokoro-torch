@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import sys
+import time
 import logging
 import math
 from pathlib import Path
@@ -26,6 +27,8 @@ from wyoming.tts import (
 )
 
 from .download import ensure_voice_exists, find_model_file
+
+SAMPLE_RATE = 24000
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,6 +66,8 @@ class KokoroEventHandler(AsyncEventHandler):
         self.is_streaming: Optional[bool] = None
         self.sbd = SentenceBoundaryDetector()
         self._synthesize: Optional[Synthesize] = None
+        self._start_time: Optional[float] = None
+        self._total_samples = 0
 
         self._model = KModel(model=find_model_file("kokoro-v1_0.pth", data_dirs), config=find_model_file("config.json", data_dirs)).to(self.cli_args.device).eval()
         if self.cli_args.compile:
@@ -111,6 +116,9 @@ class KokoroEventHandler(AsyncEventHandler):
                     # No final sentence
                     await self.write_event(AudioStop().event())
 
+                _LOGGER.debug("Time to last audio chunk: %s seconds (since first text chunk); total audio length: %s seconds", time.perf_counter() - self._start_time, self._total_samples / SAMPLE_RATE)
+                self._start_time = None
+
                 return True
 
             if not self.cli_args.streaming:
@@ -146,6 +154,9 @@ class KokoroEventHandler(AsyncEventHandler):
                 # End of audio
                 await self.write_event(SynthesizeStopped().event())
 
+                _LOGGER.debug("Time to last audio chunk: %s seconds (since first text chunk); total audio length: %s seconds", time.perf_counter() - self._start_time, self._total_samples / SAMPLE_RATE)
+                self._start_time = None
+
                 _LOGGER.debug("Text stream stopped")
                 return True
 
@@ -166,6 +177,10 @@ class KokoroEventHandler(AsyncEventHandler):
         global _VOICE, _VOICE_NAME
 
         _LOGGER.debug(synthesize)
+
+        if self._start_time is None:
+            self._start_time = time.perf_counter()
+            self._total_samples = 0
 
         raw_text = synthesize.text
 
@@ -226,13 +241,12 @@ class KokoroEventHandler(AsyncEventHandler):
 
         assert _VOICE is not None
 
-        samplerate = 24000
         width = 2 # in bytes
 
         if send_start:
             await self.write_event(
                 AudioStart(
-                    rate=samplerate,
+                    rate=SAMPLE_RATE,
                     width=width,
                     channels=1,
                 ).event(),
@@ -240,9 +254,13 @@ class KokoroEventHandler(AsyncEventHandler):
 
         bytes_per_chunk = width * self.cli_args.samples_per_chunk
 
-        for i, (graphenes, phonemes, audio) in enumerate(pipeline(text, voice=_VOICE, speed=self.cli_args.speed, split_pattern=None)):
+        for _, (graphenes, phonemes, audio) in enumerate(pipeline(text, voice=_VOICE, speed=self.cli_args.speed, split_pattern=None)):
             raw_audio = np.array(audio * 32767.0, dtype=np.int16).tobytes()
             num_chunks = int(math.ceil(len(raw_audio) / bytes_per_chunk))
+
+            if self._total_samples == 0:
+                _LOGGER.debug("Time to first audio chunk (since first text chunk): %s seconds; first audio chunk length: %s seconds", time.perf_counter() - self._start_time, audio.shape[0] / SAMPLE_RATE)
+            self._total_samples += audio.shape[0]
 
             # Split into chunks
             for i in range(num_chunks):
@@ -251,7 +269,7 @@ class KokoroEventHandler(AsyncEventHandler):
                 await self.write_event(
                     AudioChunk(
                         audio=chunk,
-                        rate=samplerate,
+                        rate=SAMPLE_RATE,
                         width=width,
                         channels=1,
                     ).event(),

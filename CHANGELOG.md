@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.1.0
+
+- Log time to first and last audio chunk in debug mode.
+
 ## 3.0.0
 
 - Forked from [wyoming-piper](https://github.com/rhasspy/wyoming-piper/) to support Kokoro Torch instead.
