@@ -31,3 +31,8 @@ script/run --voice af_heart --streaming --uri 'tcp://0.0.0.0:10300' --data-dir /
 ```
 
 See [available voices](https://huggingface.co/hexgrad/Kokoro-82M/tree/main/voices).
+
+## Remarks
+
+If you run this in a VM, you may see `Could not initialize NNPACK! Reason: Unsupported hardware.` in the logs. This seems to happen on heterogeneous CPU architectures,
+like my AMD Ryzen AI 7 HX 370. Solutions seems to be either running bare-metal or pass the L3 cache information to the VM and tweak CPU affinity.
