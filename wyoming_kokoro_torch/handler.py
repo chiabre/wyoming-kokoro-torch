@@ -255,7 +255,11 @@ class KokoroEventHandler(AsyncEventHandler):
         bytes_per_chunk = width * self.cli_args.samples_per_chunk
 
         for _, (graphenes, phonemes, audio) in enumerate(pipeline(text, voice=_VOICE, speed=self.cli_args.speed, split_pattern=None)):
-            raw_audio = np.array(audio * 32767.0, dtype=np.int16).tobytes()
+            max_volume = 0.95 / np.max(np.abs(audio))
+            if self.cli_args.volume > max_volume:
+                _LOGGER.warning("Volume is too high, reducing to %s", max_volume)
+
+            raw_audio = np.array(audio * 32767.0 * np.minimum(max_volume, self.cli_args.volume), dtype=np.int16).tobytes()
             num_chunks = int(math.ceil(len(raw_audio) / bytes_per_chunk))
 
             if self._total_samples == 0:

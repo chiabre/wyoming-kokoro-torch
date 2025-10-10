@@ -26,6 +26,14 @@ async def main() -> None:
         required=True,
         help="Default kokoro voice to use (e.g., af_heart)",
     )
+    parser.add_argument(
+        "--volume",
+        help="Volume adjustment for the voice (default: 1.0)",
+        type=float,
+        default=1.0,
+        min=0.1,
+        max=2.0,
+    )
     parser.add_argument("--uri", default="stdio://", help="unix:// or tcp://")
     parser.add_argument(
         "--data-dir",

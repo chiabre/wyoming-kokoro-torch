@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.2.0
+
+- Allow adjustment of volume.
+
 ## 3.1.1
 
 - Detect when given an empty string for the voice in Wyoming commands.
