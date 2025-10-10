@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.1.1
+
+- Detect when given an empty string for the voice in Wyoming commands.
+
 ## 3.1.0
 
 - Log time to first and last audio chunk in debug mode.

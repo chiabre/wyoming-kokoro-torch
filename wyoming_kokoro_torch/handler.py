@@ -204,11 +204,11 @@ class KokoroEventHandler(AsyncEventHandler):
         if synthesize.voice is not None:
             voice_name = synthesize.voice.name
 
-        if voice_name is None:
+        if voice_name is None or voice_name == "":
             # Default voice
             voice_name = self.cli_args.voice
 
-        assert voice_name is not None
+        assert voice_name is not None and voice_name != ""
 
         # Resolve alias
         voice_info = self.voices_info.get(voice_name, {})
