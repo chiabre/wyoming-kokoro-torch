@@ -31,8 +31,6 @@ async def main() -> None:
         help="Volume adjustment for the voice (default: 1.0)",
         type=float,
         default=1.0,
-        min=0.1,
-        max=2.0,
     )
     parser.add_argument("--uri", default="stdio://", help="unix:// or tcp://")
     parser.add_argument(
