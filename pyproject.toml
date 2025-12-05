@@ -3,7 +3,7 @@ name = "wyoming-kokoro-torch"
 version = "3.2.0"
 description = "Wyoming Server for Kokoro Torch"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [
     {name = "Laurent Debacker", email = "debackerl@gmail.com"}
@@ -45,9 +45,9 @@ wyoming-kokoro-torch = "wyoming_kokoro_torch.__main__:run"
 # CUDA (NVIDIA GPU) support
 # NOTE: The URL must be updated by the user based on their specific CUDA version 
 # and Python version to ensure the correct PyTorch wheel is downloaded.
-# This example is for Linux/x64 with CUDA 12.1.
+# This example is for Linux/x64 with CUDA 12.6.
 cuda = [
-    "torch@https://download.pytorch.org/whl/cu121/torch-2.3.0%2Bcu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+    "torch@https://download.pytorch.org/whl/cu126/torch-2.9.1%2Bcu126-cp312-cp312-manylinux_2_28_x86_64.whl ; sys_platform == 'linux'",
 ]
 
 # MPS (Apple Silicon GPU) support
