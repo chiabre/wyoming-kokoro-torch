@@ -9,7 +9,15 @@ _PROGRAM_DIR = _DIR.parent
 _VENV_DIR = _PROGRAM_DIR / ".venv"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--dev", action="store_true", help="Install dev requirements")
+parser.add_argument(
+    "--dev", action="store_true", help="Install dev requirements"
+)
+parser.add_argument(
+    "--device",
+    choices=["cpu", "cuda", "mps"],
+    default="cpu",
+    help="Target device for PyTorch installation (affects dependencies)",
+)
 args = parser.parse_args()
 
 # Create virtual environment
@@ -22,11 +30,26 @@ pip = [context.env_exe, "-m", "pip"]
 subprocess.check_call(pip + ["install", "--upgrade", "pip"])
 subprocess.check_call(pip + ["install", "--upgrade", "setuptools", "wheel"])
 
-# Install requirements
-extras = ""
-if args.dev:
-    extras = "[dev]"
+# --- Determine Installation Extras ---
+extras = []
 
+# 1. Add Device Dependencies
+if args.device in ["cuda", "mps"]:
+    # Note: The 'cpu' case is the default installation of 'torch' 
+    # handled by the main dependencies in pyproject.toml.
+    extras.append(args.device)
+
+# 2. Add Development Dependencies
+if args.dev:
+    extras.append("dev")
+
+# Format the extras string: [cuda,dev] or [mps] etc.
+extras_str = ""
+if extras:
+    extras_str = f"[{','.join(extras)}]"
+# -----------------------------------
+
+# Install requirements
 subprocess.check_call(
-    pip + ["install", "-e", f"{_PROGRAM_DIR}{extras}"]
+    pip + ["install", "-e", f"{_PROGRAM_DIR}{extras_str}"]
 )
