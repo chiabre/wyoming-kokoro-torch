@@ -29,7 +29,6 @@ script/setup --device cuda
 # Option 3: MPS (Apple Silicon M-series Macs)
 # Use this if you are running on an Apple M1/M2/M3 chip.
 script/setup --device mps
-script/setup --device cuda
 ```
 
 ### 2. Download Base Model
