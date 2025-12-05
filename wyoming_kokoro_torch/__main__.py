@@ -8,6 +8,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Set
 
+# --- NEW/MODIFIED IMPORTS ---
+import torch  # Required for device detection and model loading
+from kokoro import KModel # Required for model loading
+# ----------------------------
+
 from wyoming.info import Attribution, Info, TtsProgram, TtsVoice, TtsVoiceSpeaker
 from wyoming.server import AsyncServer
 
@@ -65,8 +70,8 @@ async def main() -> None:
     )
     parser.add_argument(
         "--device",
-        default=None, # <--- CHANGED: Set to None so Handler can auto-detect GPU
-        help="Torch backend device to use (eg. cpu, cuda, mps). Defaults to auto-detect.",
+        default=None, # <--- CHANGE 1: Default to None for auto-detection
+        help="Torch backend device to use (eg. cpu, cuda, mps, depending on your system and installed runtimes)",
     )
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
@@ -110,7 +115,7 @@ async def main() -> None:
             installed=True,
             version=None,
             languages=[
-                voice_info.get("language", {}).get("code", "en_US")
+                voice_info.get("language", {}).get("code")
             ],
             speakers=None,
         )
@@ -162,6 +167,35 @@ async def main() -> None:
 
     ensure_voice_exists(voice_name, args.data_dir, args.download_dir, voices_info)
 
+    # -------------------------------------------------------------------------
+    # --- CHANGE 2: DEVICE DETECTION AND MODEL LOADING (GPU Management) ---
+    data_dirs = args.data_dir
+    
+    # Auto-detect device if not specified by CLI
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        
+    if args.device:
+        device = args.device
+    
+    _LOGGER.info(f"Loading KModel onto device: {device}")
+
+    # Load the model ONCE globally
+    global_model = KModel(
+        model=find_model_file("kokoro-v1_0.pth", data_dirs),
+        config=find_model_file("config.json", data_dirs)
+    ).to(device).eval()
+
+    if args.compile:
+        # Note: If KModel is compiled, the `KCompiledModel` class might be needed 
+        # (if defined in your project). Keeping it simple here.
+        global_model.compile(dynamic=True)
+    
+    # -------------------------------------------------------------------------
+
     # Start server
     server = AsyncServer.from_uri(args.uri)
 
@@ -177,6 +211,9 @@ async def main() -> None:
             wyoming_info,
             args,
             voices_info,
+            # --- CHANGE 3: PASS MODEL AND DEVICE TO HANDLER ---
+            global_model,
+            device,
         )
     )
 
@@ -188,7 +225,7 @@ def get_description(voice_info: Dict[str, Any]):
     """Get a human readable description for a voice."""
     name = voice_info["name"]
     name = " ".join(name.split("_"))
-    quality = voice_info.get("quality", "unknown") # Safe .get
+    quality = voice_info["quality"]
 
     return f"{name} ({quality})"
 
@@ -197,6 +234,8 @@ def get_description(voice_info: Dict[str, Any]):
 
 
 def run():
+    # Make sure we import torch early for multi-threading context
+    import torch # Re-importing torch here ensures it is initialized early if necessary
     asyncio.run(main())
 
 
