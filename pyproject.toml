@@ -8,7 +8,7 @@ license = {text = "MIT"}
 authors = [
     {name = "Laurent Debacker", email = "debackerl@gmail.com"}
 ]
-keywords = ["rhasspy", "wyoming", "kokoro", "tts"]
+keywords = ["rhasspy", "wyoming", "kokoro", "tts", "torch", "cuda"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -21,9 +21,15 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+    # Core Wyoming and Kokoro
     "wyoming>=1.7.2,<1.8",
     "kokoro==0.9.4",
     "sentence-stream==1.2.0",
+    
+    # Core PyTorch (CPU Version) and NumPy
+    # These are required by the handler and kokoro runtime.
+    "torch==2.3.0", 
+    "numpy>=1.20,<2",
 ]
 
 [project.urls]
@@ -32,6 +38,39 @@ Homepage = "http://github.com/debackerl/wyoming-kokoro-torch"
 [project.scripts]
 wyoming-kokoro-torch = "wyoming_kokoro_torch.__main__:run"
 
+[project.optional-dependencies]
+# Dependencies for GPU/Accelerated runtimes
+# Users must install one of these if they want to use a device other than CPU.
+
+# CUDA (NVIDIA GPU) support
+# NOTE: The URL must be updated by the user based on their specific CUDA version 
+# and Python version to ensure the correct PyTorch wheel is downloaded.
+# This example is for Linux/x64 with CUDA 12.1.
+cuda = [
+    "torch@https://download.pytorch.org/whl/cu121/torch-2.3.0%2Bcu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+]
+
+# MPS (Apple Silicon GPU) support
+# Requires the standard torch package, ensuring it's the specified version.
+mps = [
+    "torch==2.3.0", 
+]
+
+# Development Dependencies
+dev = [
+    "black==24.8.0",
+    "flake8==7.1.1",
+    "mypy==1.14.0",
+    "pylint==3.2.7",
+    "pytest==8.3.4",
+    "pytest-asyncio==1.1.0",
+    "build==1.2.2",
+    "scipy>=1.10,<2",
+    "python-speech-features==0.6",
+    "twine==6.1.0",
+]
+
+# --- Build and Tooling Configuration ---
 [tool.setuptools.packages.find]
 include = ["wyoming_kokoro_torch"]
 exclude = ["tests", "tests.*"]
@@ -55,18 +94,3 @@ asyncio_mode = "auto"
 [tool.mypy]
 check_untyped_defs = true
 disallow_untyped_defs = true
-
-[project.optional-dependencies]
-dev = [
-    "black==24.8.0",
-    "flake8==7.1.1",
-    "mypy==1.14.0",
-    "pylint==3.2.7",
-    "pytest==8.3.4",
-    "pytest-asyncio==1.1.0",
-    "build==1.2.2",
-    "scipy>=1.10,<2",
-    "numpy>=1.20,<2",
-    "python-speech-features==0.6",
-    "twine==6.1.0",
-]
