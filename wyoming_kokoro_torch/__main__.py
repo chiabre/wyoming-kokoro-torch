@@ -65,8 +65,8 @@ async def main() -> None:
     )
     parser.add_argument(
         "--device",
-        default="cpu",
-        help="Torch backend device to use (eg. cpu, cuda, mps, depending on your system and installed runtimes)",
+        default=None, # <--- CHANGED: Set to None so Handler can auto-detect GPU
+        help="Torch backend device to use (eg. cpu, cuda, mps). Defaults to auto-detect.",
     )
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
@@ -110,7 +110,7 @@ async def main() -> None:
             installed=True,
             version=None,
             languages=[
-                voice_info.get("language", {}).get("code")
+                voice_info.get("language", {}).get("code", "en_US")
             ],
             speakers=None,
         )
@@ -188,7 +188,7 @@ def get_description(voice_info: Dict[str, Any]):
     """Get a human readable description for a voice."""
     name = voice_info["name"]
     name = " ".join(name.split("_"))
-    quality = voice_info["quality"]
+    quality = voice_info.get("quality", "unknown") # Safe .get
 
     return f"{name} ({quality})"
 
