@@ -8,10 +8,22 @@ _DIR = Path(__file__).parent
 _PROGRAM_DIR = _DIR.parent
 _VENV_DIR = _PROGRAM_DIR / ".venv"
 
+# Initialize python_exe to a safe default
+python_exe = "python3" 
+
 if _VENV_DIR.exists():
+    # If VENV exists, get its executable path
+    # We must ensure context is created before accessing context.env_exe
     context = venv.EnvBuilder().ensure_directories(_VENV_DIR)
     python_exe = context.env_exe
-else:
-    python_exe = "python3"
+    
+    # We don't need 'else' because python_exe is already set to 'python3' 
+    # if the directory doesn't exist.
 
-subprocess.check_call([context.env_exe, "-m", "wyoming_kokoro_torch"] + sys.argv[1:])
+# --- Crucial Fix ---
+# Use the determined python_exe variable here.
+# Note: When using a full path to the python executable, the -m flag is often 
+# dropped in favor of running the module as a script, but keeping the -m 
+# pattern is generally safer for finding the installed module.
+
+subprocess.check_call([python_exe, "-m", "wyoming_kokoro_torch"] + sys.argv[1:])
