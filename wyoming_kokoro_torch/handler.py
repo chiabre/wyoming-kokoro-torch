@@ -32,13 +32,11 @@ SAMPLE_RATE = 24000
 
 _LOGGER = logging.getLogger(__name__)
 
-# Keep the most recently used voice loaded
-_VOICE = None # will be a FloatTensor of the voice model
+_VOICE: Optional[torch.Tensor] = None # will be a FloatTensor of the voice model
 _VOICE_NAME: Optional[str] = None
-_VOICE_LOCK = asyncio.Lock()
+_VOICE_LOCK = asyncio.Lock() # TODO: Concurrency fix needed: This lock and the two variables above should be instance variables (self._voice_lock, etc.)
 
-
-# class KCompiledModel(KModel):
+# class KCompiledModel(KModel): # Assuming this exists in your original project
 #     def __init__(self, *args, **kwargs):
 #         super().__init__(*args, **kwargs)
 
@@ -53,13 +51,16 @@ class KokoroEventHandler(AsyncEventHandler):
         wyoming_info: Info,
         cli_args: argparse.Namespace,
         voices_info: Dict[str, Any],
+        # --- NEW ARGUMENTS FOR GLOBAL MODEL AND DEVICE (GPU Management) ---
+        model: KModel,
+        device: str,
         *args,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
 
+        # --- Original state setup ---
         data_dirs = cli_args.data_dir
-
         self.cli_args = cli_args
         self.wyoming_info_event = wyoming_info.event()
         self.voices_info = voices_info
@@ -69,15 +70,20 @@ class KokoroEventHandler(AsyncEventHandler):
         self._start_time: Optional[float] = None
         self._total_samples = 0
 
-        self._model = KModel(model=find_model_file("kokoro-v1_0.pth", data_dirs), config=find_model_file("config.json", data_dirs)).to(self.cli_args.device).eval()
-        if self.cli_args.compile:
-            self._model.compile(dynamic=True)
+        # --- MINIMAL CHANGE 1: USE PRE-LOADED MODEL/DEVICE (GPU Management) ---
+        self._model = model
+        self.device = device
+        
+        _LOGGER.info(f"Using inference device: {self.device}")
 
+        # Original model loading block REMOVED to use pre-loaded model.
+        
         self._pipelines: Dict[str, KPipeline] = {}
-
+        
     def get_pipeline(self, lang_code: str) -> KPipeline:
         if lang_code not in self._pipelines:
-            self._pipelines[lang_code] = KPipeline(lang_code, model=self._model)
+            # Pipeline is created using the pre-loaded model/device
+            self._pipelines[lang_code] = KPipeline(lang_code, model=self._model, device=self.device)
         return self._pipelines[lang_code]
 
     async def handle_event(self, event: Event) -> bool:
@@ -154,7 +160,7 @@ class KokoroEventHandler(AsyncEventHandler):
                 # End of audio
                 await self.write_event(SynthesizeStopped().event())
 
-                _LOGGER.debug("Time to last audio chunk: %s seconds (since first text chunk); total audio length: %s seconds", time.perf_counter() - self._start_time, self._total_samples / SAMPLE_RATE)
+                _LOGGER.debug("Time to last audio chunk: %s seconds (since first text chunk): total audio length: %s seconds", time.perf_counter() - self._start_time, self._total_samples / SAMPLE_RATE)
                 self._start_time = None
 
                 _LOGGER.debug("Text stream stopped")
@@ -174,7 +180,7 @@ class KokoroEventHandler(AsyncEventHandler):
     async def _handle_synthesize(
         self, synthesize: Synthesize, send_start: bool = True, send_stop: bool = True
     ) -> bool:
-        global _VOICE, _VOICE_NAME
+        global _VOICE, _VOICE_NAME, _VOICE_LOCK # Using globals per user request
 
         _LOGGER.debug(synthesize)
 
@@ -220,6 +226,7 @@ class KokoroEventHandler(AsyncEventHandler):
 
         pipeline = self.get_pipeline(lang_code)
 
+        # --- MINIMAL CHANGE 2: ENSURE VOICE TENSOR IS ON THE CORRECT DEVICE (GPU Management) ---
         async with _VOICE_LOCK:
             if voice_name != _VOICE_NAME:
                 # Load new voice
@@ -236,7 +243,10 @@ class KokoroEventHandler(AsyncEventHandler):
                 )
 
                 # TODO: voices can be mixed by seperating them by a comma
-                _VOICE = pipeline.load_voice(str(voice_model_path))
+                voice_tensor = pipeline.load_voice(str(voice_model_path))
+                
+                # Move voice to the device determined in main
+                _VOICE = voice_tensor.to(self.device) 
                 _VOICE_NAME = voice_name
 
         assert _VOICE is not None
